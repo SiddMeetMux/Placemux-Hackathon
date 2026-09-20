@@ -361,6 +361,23 @@
       white-space: nowrap
     }
 
+    .btn-confirm {
+      border: 1.5px solid var(--green);
+      color: var(--green);
+      background: #f4fdf9;
+      font-weight: 800;
+      font-size: 12.5px;
+      padding: 8px 12px;
+      border-radius: 9px;
+      cursor: pointer;
+      white-space: nowrap;
+      display: none;
+      margin-left: 6px
+    }
+    .btn-confirm.ready {
+      display: inline-block
+    }
+
     .letter-badge {
       width: 34px;
       height: 34px;
@@ -741,6 +758,7 @@
       </div>
       <div class="right">
         <a class="follow" href="${s.url}" target="_blank" rel="noopener" onclick="armFollow(${i})">${s.cta}</a>
+        <button class="btn-confirm" id="confirm_${i}" onclick="confirmFollow(${i})">&#10003; I've Followed</button>
         <div class="letter-badge" id="badge_${i}">?</div>
       </div>`;
         wrap.appendChild(row);
@@ -756,6 +774,18 @@
       armedIndex = i;
       awayStart = null;
       setStatus(i, "Waiting for you to come back…");
+      // Reset confirm button if user taps Follow again without confirming
+      const prevBtn = document.getElementById("confirm_" + i);
+      if (prevBtn) prevBtn.classList.remove("ready");
+    }
+    function confirmFollow(i) {
+      // Called when user clicks confirm button after following — only works if button is active
+      const confirmBtn = document.getElementById("confirm_" + i);
+      if (!confirmBtn || !confirmBtn.classList.contains("ready")) return;
+      confirmBtn.classList.remove("ready");
+      armedIndex = null;
+      awayStart = null;
+      completeReveal(i);
     }
     function handleAway() {
       if (armedIndex !== null && awayStart === null) awayStart = Date.now();
@@ -765,12 +795,16 @@
       const elapsed = Date.now() - awayStart;
       const i = armedIndex;
       if (elapsed >= MIN_DWELL_MS) {
-        completeReveal(i);
+        // Enough time spent away — show confirm button so user must explicitly confirm
+        setStatus(i, "Great! Now tap 'I've Followed' below to confirm 👍");
+        const confirmBtn = document.getElementById("confirm_" + i);
+        if (confirmBtn) confirmBtn.classList.add("ready");
+        // Keep armedIndex set so confirmFollow knows which channel is pending
       } else {
-        setStatus(i, "That was quick 👀 — please actually " + SOCIALS[i].cta.toLowerCase() + " us, then come back");
+        setStatus(i, "That was quick 👀 — please actually " + SOCIALS[i].cta.toLowerCase() + " us (stay 6+ sec), then come back");
+        armedIndex = null;
+        awayStart = null;
       }
-      armedIndex = null;
-      awayStart = null;
     }
     document.addEventListener("visibilitychange", () => { document.hidden ? handleAway() : handleReturn(); });
     window.addEventListener("blur", handleAway);
