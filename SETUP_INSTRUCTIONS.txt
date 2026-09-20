@@ -1,0 +1,100 @@
+TECHNOVA PLACEMUX 2026 — SETUP INSTRUCTIONS
+=============================================
+
+WHAT'S INCLUDED
+---------------
+1. technova_placemux_mission.html   → the full mission page. Host this
+   anywhere (your own domain, GitHub Pages, Netlify, etc.) and point
+   your QR code / shared link to that URL.
+2. leaderboard_apps_script.gs        → backend code for the automatic
+   Top-50 leaderboard, deployed via Google Sheets + Apps Script (free,
+   no server needed).
+
+FLOW (fully automatic, no staff needed at any step)
+----------------------------------------------------
+1. Registration form (your real form) is embedded directly on the page.
+2. The moment someone submits it, the page auto-detects the submission
+   and instantly moves them into the mission — no manual click, no
+   redirect link to manage.
+3. They tap through all 6 PlaceMux channels (Website, Instagram,
+   LinkedIn, Facebook, YouTube, Google Reviews). Each tap instantly
+   reveals one letter of the code: H A C K 2 6.
+4. They enter their name + roll no./college, then race the clock to
+   type the code back in.
+5. On success, their name + time is saved automatically to your Google
+   Sheet, and the live Top 50 is shown right there on the screen.
+
+STEP-BY-STEP: CONNECT THE LEADERBOARD (do this once)
+------------------------------------------------------
+1. Create a new Google Sheet.
+2. Rename the first tab (bottom-left) to exactly: Leaderboard
+3. In row 1, type these column headers exactly:
+      Timestamp | Name | Roll | Seconds | Display
+4. Open Extensions > Apps Script from the Sheet's menu.
+5. Delete any placeholder code in the editor, then paste in the full
+   contents of leaderboard_apps_script.gs.
+6. Click Deploy > New deployment.
+     - Click the gear icon next to "Select type" and choose "Web app".
+     - Description: Leaderboard v1
+     - Execute as: Me
+     - Who has access: Anyone
+7. Click Deploy. Google will ask you to authorize — click through
+   (choose your account, click Advanced > Go to project (unsafe) if
+   Google shows a warning screen — this is normal for your own script).
+8. Copy the "Web app URL" it gives you — it looks like:
+      https://script.google.com/macros/s/XXXXXXXX/exec
+9. Open technova_placemux_mission.html in any text editor, find this
+   line near the top of the <script> section:
+      const LEADERBOARD_ENDPOINT = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+   and replace the placeholder text with the URL you copied.
+10. Save the file and re-upload/host it. Done — the leaderboard is now
+    fully live and automatic.
+
+Whenever you edit the .gs script later, you must create a NEW
+deployment version (Deploy > Manage deployments > pencil icon > New
+version) for changes to take effect.
+
+HOSTING THE PAGE
+-----------------
+The HTML file is fully self-contained (logo, QR images, and all styling
+are embedded inside it) — you can host it as a single file on:
+  - GitHub Pages / Netlify / Vercel (free, easiest)
+  - Your own college/event domain
+  - Even Google Drive (shared as "Anyone with link" + a converter) —
+    though a real static host is recommended for reliability.
+
+Point your printed QR code / WhatsApp broadcast link to wherever you
+host this file.
+
+NOTES
+-----
+- The registration form is embedded via an iframe. If a participant's
+  browser blocks third-party cookies (rare on mobile), the auto-detect
+  may not fire — a "Already submitted? Continue manually →" button is
+  shown as a safety net so nobody gets stuck.
+
+- EVERY PARTICIPANT GETS THEIR OWN RANDOM CODE. There is no single
+  fixed answer (like "HACK26") anymore — each browser session generates
+  a fresh random 6-character code the moment the mission starts, so one
+  person's code is useless to anyone else. It's stored in sessionStorage
+  so a refresh mid-mission doesn't change it.
+
+- "GENUINE FOLLOW" VERIFICATION — HOW IT WORKS AND ITS LIMITS:
+  A real, 100%-certain check of "did this person actually follow the
+  page" is not possible from a simple webpage — that needs each
+  platform's official OAuth login + API (Instagram/Facebook Graph API,
+  YouTube Data API, LinkedIn API), each requiring a developer app,
+  review, and the user logging into that platform through your app.
+  That's a multi-week integration project per platform, not something
+  a single event page can do.
+  What this page does instead: channels unlock ONE AT A TIME, in order.
+  Tapping "Follow" arms that channel; the letter only reveals once the
+  browser detects the person actually left this tab (went to the real
+  Instagram/LinkedIn/etc. page or app) for at least 6 seconds and then
+  came back. Clicking and instantly returning does NOT reveal the
+  letter — they'll see "That was quick 👀 — please actually follow us,
+  then come back" and can try again. This isn't unbeatable (someone
+  could genuinely wait 6 seconds without following), but it removes the
+  instant-reveal loophole and makes casual skipping much harder.
+  You can change the minimum wait time by editing MIN_DWELL_MS near the
+  top of the <script> section (currently 6000 = 6 seconds).
