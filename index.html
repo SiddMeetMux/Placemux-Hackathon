@@ -513,6 +513,38 @@
     }
 
     /* Success */
+    .btn-export {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      gap: 8px;
+      background: linear-gradient(135deg, #0fae7e, #0c8c65);
+      color: #ffffff;
+      border: none;
+      padding: 12px 20px;
+      border-radius: 12px;
+      font-weight: 800;
+      font-size: 15px;
+      cursor: pointer;
+      box-shadow: 0 4px 14px rgba(15, 174, 126, 0.35);
+      transition: transform 0.15s ease, box-shadow 0.15s ease, background 0.15s ease;
+      width: 100%;
+      max-width: 380px;
+      margin: 8px auto;
+      font-family: inherit;
+    }
+
+    .btn-export:hover {
+      transform: translateY(-2px);
+      box-shadow: 0 6px 18px rgba(15, 174, 126, 0.45);
+      background: linear-gradient(135deg, #11be8a, #0fae7e);
+    }
+
+    .btn-export:active {
+      transform: translateY(0);
+      box-shadow: 0 2px 8px rgba(15, 174, 126, 0.3);
+    }
+
     .trophy {
       font-size: 52px;
       margin-bottom: 4px
@@ -663,6 +695,11 @@
       <h2>Access granted</h2>
       <p class="sub" style="margin-bottom:0">You cracked TECHNOVA PLACEMUX 2026.</p>
       <div class="time-pill" id="finalTime"></div>
+      <div style="margin: 8px 0 14px;">
+        <button type="button" class="btn-export" onclick="exportTop50Spreadsheet()" id="btnExportTop50">
+          📊 View & Download Top 50 Spreadsheet (.csv)
+        </button>
+      </div>
       <div class="notice">Show this screen at the PlaceMux registration desk to claim your spot on the leaderboard.
       </div>
       <h3 style="margin-bottom:4px">🏆 Top 50 — fastest times</h3>
@@ -739,8 +776,9 @@
     // every link at once.
     let revealed = 0;
     let nextIndex = 0;
-    let armedIndex = null;
-    let awayStart = null;
+    let armedIndex = null;   // which channel the user last clicked Follow on
+    let awayStart = null;    // timestamp when they left this tab after arming
+    let pendingConfirm = false; // true = confirm button visible, waiting for click
 
     function buildSocials() {
       const wrap = document.getElementById("socials");
@@ -763,50 +801,90 @@
       </div>`;
         wrap.appendChild(row);
       });
-      setStatus(0, "Tap " + SOCIALS[0].cta + ", do it for real, then come back here");
+      setStatus(0, "Tap " + SOCIALS[0].cta + ", follow us for real, then come back and tap 'I've Followed'");
     }
     function setStatus(i, text) {
       const el = document.getElementById("status_" + i);
       if (el) el.textContent = text || "";
     }
+
+    /* ----- Follow flow: click → leave (6 s+) → confirm button → letter ----- */
+
     function armFollow(i) {
-      if (i !== nextIndex) return; // only the unlocked one can be armed
+      // Guard: only the currently unlocked channel can be armed
+      if (i !== nextIndex) return;
+      // If confirm button is already visible, user clicked Follow again without confirming
+      // Hide it and restart the whole flow from scratch
+      if (pendingConfirm && armedIndex === i) hideConfirm(i);
       armedIndex = i;
-      awayStart = null;
-      setStatus(i, "Waiting for you to come back…");
-      // Reset confirm button if user taps Follow again without confirming
-      const prevBtn = document.getElementById("confirm_" + i);
-      if (prevBtn) prevBtn.classList.remove("ready");
+      awayStart = null;       // timer starts only when they actually leave the tab
+      pendingConfirm = false;
+      setStatus(i, "Go follow us, stay there, then come back and tap 'I've Followed' 📲");
     }
+
+    function hideConfirm(i) {
+      const btn = document.getElementById("confirm_" + i);
+      if (btn) btn.classList.remove("ready");
+      pendingConfirm = false;
+    }
+
+    function handleAway() {
+      // Tab/window lost focus
+      if (pendingConfirm && armedIndex !== null) {
+        // Confirm button was visible but user left before clicking it
+        // Cancel everything  they must redo the follow flow
+        const i = armedIndex;
+        hideConfirm(i);
+        awayStart = null;
+        armedIndex = null;
+        setStatus(i, "You left before confirming 🔁 Tap Follow again to retry");
+        return;
+      }
+      // Normal case: start the away-timer on FIRST blur after arming
+      if (armedIndex !== null && awayStart === null) {
+        awayStart = Date.now();
+      }
+    }
+
+    function handleReturn() {
+      // Tab/window regained focus
+      if (armedIndex === null || awayStart === null || pendingConfirm) return;
+      const elapsed = Date.now() - awayStart;
+      const i = armedIndex;
+      if (elapsed >= MIN_DWELL_MS) {
+        // Long enough away: show confirm button; reset timer so re-blurring does not help
+        awayStart = null;
+        pendingConfirm = true;
+        setStatus(i, "Nice! Now tap 'I've Followed' below to unlock the letter 👍");
+        const confirmBtn = document.getElementById("confirm_" + i);
+        if (confirmBtn) confirmBtn.classList.add("ready");
+        // armedIndex intentionally kept set so confirmFollow can match it
+      } else {
+        // Not long enough; reset fully so they must redo from armFollow
+        setStatus(i, "Too quick 👀 — actually " + SOCIALS[i].cta.toLowerCase() +
+          " us properly and stay for a few seconds, then come back");
+        armedIndex = null;
+        awayStart = null;
+        pendingConfirm = false;
+      }
+    }
+
     function confirmFollow(i) {
-      // Called when user clicks confirm button after following — only works if button is active
+      // ONLY path that calls completeReveal()
+      // Requires: correct channel, confirm button visible, pendingConfirm flag set
       const confirmBtn = document.getElementById("confirm_" + i);
       if (!confirmBtn || !confirmBtn.classList.contains("ready")) return;
+      if (!pendingConfirm || armedIndex !== i) return;
       confirmBtn.classList.remove("ready");
+      pendingConfirm = false;
       armedIndex = null;
       awayStart = null;
       completeReveal(i);
     }
-    function handleAway() {
-      if (armedIndex !== null && awayStart === null) awayStart = Date.now();
-    }
-    function handleReturn() {
-      if (armedIndex === null || awayStart === null) return;
-      const elapsed = Date.now() - awayStart;
-      const i = armedIndex;
-      if (elapsed >= MIN_DWELL_MS) {
-        // Enough time spent away — show confirm button so user must explicitly confirm
-        setStatus(i, "Great! Now tap 'I've Followed' below to confirm 👍");
-        const confirmBtn = document.getElementById("confirm_" + i);
-        if (confirmBtn) confirmBtn.classList.add("ready");
-        // Keep armedIndex set so confirmFollow knows which channel is pending
-      } else {
-        setStatus(i, "That was quick 👀 — please actually " + SOCIALS[i].cta.toLowerCase() + " us (stay 6+ sec), then come back");
-        armedIndex = null;
-        awayStart = null;
-      }
-    }
-    document.addEventListener("visibilitychange", () => { document.hidden ? handleAway() : handleReturn(); });
+
+    document.addEventListener("visibilitychange", () => {
+      document.hidden ? handleAway() : handleReturn();
+    });
     window.addEventListener("blur", handleAway);
     window.addEventListener("focus", handleReturn);
 
@@ -816,7 +894,7 @@
       badge.textContent = CODE[i];
       badge.classList.add("on");
       document.getElementById("row_" + SOCIALS[i].key).classList.add("done");
-      setStatus(i, "✓ Verified");
+      setStatus(i, "✅ Verified — letter unlocked!");
       revealed++;
       nextIndex = i + 1;
       document.getElementById("countText").textContent = revealed + " / 6";
@@ -825,7 +903,7 @@
       if (nextIndex < SOCIALS.length) {
         const nextRow = document.getElementById("row_" + SOCIALS[nextIndex].key);
         nextRow.classList.remove("locked");
-        setStatus(nextIndex, "Tap " + SOCIALS[nextIndex].cta + ", do it for real, then come back here");
+        setStatus(nextIndex, "Tap " + SOCIALS[nextIndex].cta + ", follow us for real, then come back and tap 'I've Followed'");
       }
       if (revealed === 6) {
         document.getElementById("toCodeBtn").classList.remove("hide");
@@ -893,44 +971,197 @@
     }
 
     /* ---------- STEP 5: SAVE RESULT + LOAD LEADERBOARD (fully automated) ---------- */
+    const LOCAL_STORAGE_KEY = "placemux_top50_technova2026";
+
+    function getLocalStorageTop50() {
+      try {
+        const raw = localStorage.getItem(LOCAL_STORAGE_KEY);
+        return raw ? JSON.parse(raw) : [];
+      } catch (e) {
+        return [];
+      }
+    }
+
+    function saveLocalStorageTop50(list) {
+      try {
+        localStorage.setItem(LOCAL_STORAGE_KEY, JSON.stringify(list));
+      } catch (e) {
+        console.warn("Unable to save to localStorage", e);
+      }
+    }
+
+    function updateLocalStorageTop50(newEntry) {
+      const list = getLocalStorageTop50();
+      // Deduplicate by Roll Number (or Name) keeping fastest time
+      let found = false;
+      for (let i = 0; i < list.length; i++) {
+        const sameRoll = newEntry.roll && list[i].roll && list[i].roll.toLowerCase() === newEntry.roll.toLowerCase();
+        const sameName = list[i].name && newEntry.name && list[i].name.toLowerCase() === newEntry.name.toLowerCase();
+        if (sameRoll || sameName) {
+          found = true;
+          if ((parseFloat(newEntry.seconds) || 999999) < (parseFloat(list[i].seconds) || 999999)) {
+            list[i] = newEntry;
+          }
+          break;
+        }
+      }
+      if (!found) {
+        list.push(newEntry);
+      }
+      list.sort((a, b) => (parseFloat(a.seconds) || 999999) - (parseFloat(b.seconds) || 999999));
+      const top50 = list.slice(0, 50);
+      saveLocalStorageTop50(top50);
+      return top50;
+    }
+
+    function mergeLocalStorageTop50(remoteRows) {
+      if (!remoteRows || !Array.isArray(remoteRows)) return getLocalStorageTop50();
+      const list = getLocalStorageTop50();
+      remoteRows.forEach(remote => {
+        if (!remote || !remote.name) return;
+        let found = false;
+        for (let i = 0; i < list.length; i++) {
+          const sameRoll = remote.roll && list[i].roll && list[i].roll.toLowerCase() === remote.roll.toLowerCase();
+          const sameName = list[i].name && remote.name && list[i].name.toLowerCase() === remote.name.toLowerCase();
+          if (sameRoll || sameName) {
+            found = true;
+            if ((parseFloat(remote.seconds) || 999999) < (parseFloat(list[i].seconds) || 999999)) {
+              list[i] = remote;
+            }
+            break;
+          }
+        }
+        if (!found) {
+          list.push(remote);
+        }
+      });
+      list.sort((a, b) => (parseFloat(a.seconds) || 999999) - (parseFloat(b.seconds) || 999999));
+      const top50 = list.slice(0, 50);
+      saveLocalStorageTop50(top50);
+      return top50;
+    }
+
     function saveAndLoadLeaderboard(name, roll, elapsedSeconds, finalTimeStr) {
       const lbStatus = document.getElementById("lbStatus");
+      const entry = {
+        name: name,
+        roll: roll,
+        seconds: Math.round(elapsedSeconds * 10) / 10,
+        display: finalTimeStr,
+        ts: new Date().toISOString()
+      };
+
+      // Store current user to localStorage Top 50 immediately
+      const localTop50 = updateLocalStorageTop50(entry);
+      renderLeaderboard(localTop50, name);
+
       if (!LEADERBOARD_ENDPOINT || LEADERBOARD_ENDPOINT.indexOf("PASTE_YOUR") === 0) {
-        lbStatus.textContent = "Leaderboard backend not connected yet — see SETUP_INSTRUCTIONS.txt.";
+        lbStatus.textContent = "Saved locally to storage! (Showing Top 50)";
         return;
       }
-      const payload = { name, roll, seconds: Math.round(elapsedSeconds * 10) / 10, display: finalTimeStr, ts: new Date().toISOString() };
+
+      lbStatus.textContent = "Saving result to live leaderboard…";
       fetch(LEADERBOARD_ENDPOINT, {
         method: "POST",
         headers: { "Content-Type": "text/plain;charset=utf-8" }, // avoids CORS preflight against Apps Script
-        body: JSON.stringify(payload)
+        body: JSON.stringify(entry)
       })
         .then(() => loadLeaderboard(name))
         .catch(() => {
-          lbStatus.textContent = "Saved locally — leaderboard will sync shortly.";
+          lbStatus.textContent = "Saved locally in browser storage! Leaderboard will sync with sheet when online.";
         });
     }
+
     function loadLeaderboard(myName) {
       const lbStatus = document.getElementById("lbStatus");
       fetch(LEADERBOARD_ENDPOINT + "?action=top50")
         .then(r => r.json())
         .then(rows => {
-          lbStatus.textContent = "Live leaderboard:";
-          renderLeaderboard(rows, myName);
+          lbStatus.textContent = "Live Leaderboard (Top 50):";
+          const merged = mergeLocalStorageTop50(rows);
+          renderLeaderboard(merged, myName);
         })
         .catch(() => {
-          lbStatus.textContent = "Result saved! Leaderboard will appear at the registration desk screen.";
+          lbStatus.textContent = "Top 50 (Local Storage):";
+          renderLeaderboard(getLocalStorageTop50(), myName);
         });
     }
+
+    function escapeHtml(str) {
+      return String(str == null ? "" : str)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;');
+    }
+
     function renderLeaderboard(rows, myName) {
       if (!rows || !rows.length) return;
-      let html = "<table class='lb'><tr><th>#</th><th>Name</th><th>Time</th></tr>";
+      let html = "<table class='lb'><tr><th>#</th><th>Name</th><th>Roll No.</th><th>Time</th></tr>";
       rows.slice(0, 50).forEach((r, i) => {
-        const mine = r.name === myName ? "class='me'" : "";
-        html += `<tr ${mine}><td class="rank">${i + 1}</td><td>${r.name}</td><td>${r.display || r.seconds + 's'}</td></tr>`;
+        const mine = (r.name === myName || (participant && r.name === participant.name)) ? "class='me'" : "";
+        const safeName = escapeHtml(r.name);
+        const safeRoll = escapeHtml(r.roll || "-");
+        const safeTime = escapeHtml(r.display || (r.seconds ? r.seconds + 's' : '-'));
+        html += `<tr ${mine}><td class="rank">${i + 1}</td><td>${safeName}</td><td>${safeRoll}</td><td>${safeTime}</td></tr>`;
       });
       html += "</table>";
       document.getElementById("lbTableWrap").innerHTML = html;
+    }
+
+    /* ---------- SPREADSHEET (CSV) EXPORT OF TOP 50 ---------- */
+    function escapeCsv(val) {
+      const str = String(val == null ? "" : val);
+      if (str.includes(",") || str.includes('"') || str.includes("\n") || str.includes("\r")) {
+        return '"' + str.replace(/"/g, '""') + '"';
+      }
+      return '"' + str + '"';
+    }
+
+    function exportTop50Spreadsheet() {
+      let list = getLocalStorageTop50();
+      if ((!list || !list.length) && participant && participant.name) {
+        const elapsed = startTime ? (performance.now() - startTime) / 1000 : 0;
+        list = [{
+          name: participant.name,
+          roll: participant.roll || "",
+          seconds: Math.round(elapsed * 10) / 10,
+          display: fmt(elapsed)
+        }];
+      }
+
+      if (!list || !list.length) {
+        alert("No leaderboard data found in storage yet. Complete the mission first!");
+        return;
+      }
+
+      list.sort((a, b) => (parseFloat(a.seconds) || 999999) - (parseFloat(b.seconds) || 999999));
+      const top50 = list.slice(0, 50);
+
+      // Create CSV with columns: Rank, Name, Roll Number, Time
+      const headers = ["Rank", "Name", "Roll Number", "Time"];
+      const rows = top50.map((r, i) => [
+        i + 1,
+        r.name || "",
+        r.roll || "",
+        r.display || (r.seconds ? r.seconds + "s" : "")
+      ]);
+
+      const csvLines = [
+        headers.map(escapeCsv).join(","),
+        ...rows.map(row => row.map(escapeCsv).join(","))
+      ];
+      const csvString = "\uFEFF" + csvLines.join("\r\n");
+
+      const blob = new Blob([csvString], { type: "text/csv;charset=utf-8;" });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.setAttribute("download", "PlaceMux_Technova2026_Top50_Students.csv");
+      document.body.appendChild(link);
+      link.click();
+      document.body.removeChild(link);
+      URL.revokeObjectURL(url);
     }
   </script>
 </body>
