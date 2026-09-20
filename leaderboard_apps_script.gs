@@ -1,152 +1,170 @@
 /**
- * TECHNOVA PLACEMUX 2026 — Leaderboard Backend
- * ================================================
- * Paste this entire file into Google Apps Script (Extensions > Apps Script from
- * your Google Sheet), then deploy as a Web App:
- *   Execute as: Me  |  Who has access: Anyone
+ * TECHNOVA PLACEMUX 2026 — LEADERBOARD APPS SCRIPT BACKEND
+ * =========================================================
+ * Deploys as a Google Apps Script Web App backed by Google Sheets.
+ * Stores Name, Roll No / College, Elapsed Time, Display Time, and Mission Code.
+ * Serves live ranked Top 50, Top 100, and All participant results with deduplication.
  *
- * Your Sheet must have a tab named exactly: Leaderboard
- * Row 1 column headers (must match exactly):
- *   Timestamp | Name | Roll | Seconds | Display
- *
- * After deploying, copy the Web App URL and paste it into
- * technova_placemux_mission.html at:
- *   const LEADERBOARD_ENDPOINT = "PASTE_YOUR_APPS_SCRIPT_WEB_APP_URL_HERE";
+ * HOW TO DEPLOY:
+ * 1. In your Google Sheet, click Extensions > Apps Script.
+ * 2. Paste this entire code into the editor (replace any existing code).
+ * 3. Click "Deploy" > "New deployment".
+ * 4. Select type "Web app":
+ *    - Description: Leaderboard v1
+ *    - Execute as: Me
+ *    - Who has access: Anyone
+ * 5. Click "Deploy", authorize access, and copy the Web App URL.
+ * 6. Paste that URL into technova_placemux_mission.html and admin_leaderboard.html.
  */
 
-// ── Configuration ─────────────────────────────────────────────────────────────
-var SHEET_NAME   = "Leaderboard";   // Tab name in your Google Sheet
-var TOP_N        = 50;              // How many rows to return in the leaderboard
-// ─────────────────────────────────────────────────────────────────────────────
+const SHEET_NAME = "Leaderboard";
+const HEADERS = ["Timestamp", "Name", "Roll", "Seconds", "Display", "Code"];
 
 /**
- * doPost — Receives a new leaderboard entry from the mission page.
- * The page sends a JSON body with: { name, roll, seconds, display, ts }
+ * Ensures the target sheet and header row exist.
  */
-function doPost(e) {
-  try {
-    var data    = JSON.parse(e.postData.contents);
-    var name    = (data.name    || "").toString().trim();
-    var roll    = (data.roll    || "").toString().trim();
-    var seconds = parseFloat(data.seconds) || 0;
-    var display = (data.display || seconds + "s").toString();
-    var ts      = (data.ts      || new Date().toISOString()).toString();
-
-    if (!name || !roll) {
-      return jsonResponse({ ok: false, error: "Name and Roll are required" });
-    }
-
-    var sheet = getSheet();
-    // Append row: Timestamp | Name | Roll | Seconds | Display
-    sheet.appendRow([ts, name, roll, seconds, display]);
-
-    // Flush to ensure the write completes before we read back
-    SpreadsheetApp.flush();
-
-    return jsonResponse({ ok: true, message: "Entry saved" });
-  } catch (err) {
-    return jsonResponse({ ok: false, error: err.message });
-  }
-}
-
-/**
- * doGet — Returns the top-N leaderboard as JSON.
- * Called by the mission page with ?action=top50
- */
-function doGet(e) {
-  try {
-    var action = (e.parameter && e.parameter.action) ? e.parameter.action : "";
-
-    if (action === "top50" || action === "") {
-      var rows = getTopRows(TOP_N);
-      return jsonResponse(rows);
-    }
-
-    return jsonResponse({ ok: false, error: "Unknown action: " + action });
-  } catch (err) {
-    return jsonResponse({ ok: false, error: err.message });
-  }
-}
-
-// ── Helpers ───────────────────────────────────────────────────────────────────
-
-/**
- * getSheet — Returns the Leaderboard sheet, creating headers if missing.
- */
-function getSheet() {
-  var ss    = SpreadsheetApp.getActiveSpreadsheet();
-  var sheet = ss.getSheetByName(SHEET_NAME);
+function getOrCreateSheet() {
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
+  let sheet = ss.getSheetByName(SHEET_NAME);
   if (!sheet) {
     sheet = ss.insertSheet(SHEET_NAME);
   }
-  // Ensure headers exist
   if (sheet.getLastRow() === 0) {
-    sheet.appendRow(["Timestamp", "Name", "Roll", "Seconds", "Display"]);
-    sheet.getRange(1, 1, 1, 5).setFontWeight("bold");
+    sheet.appendRow(HEADERS);
+    sheet.getRange(1, 1, 1, HEADERS.length).setFontWeight("bold").setBackground("#1267e8").setFontColor("#ffffff");
+    sheet.setFrozenRows(1);
   }
   return sheet;
 }
 
 /**
- * getTopRows — Reads all data rows, deduplicates by name (keeps fastest),
- * sorts by Seconds ascending, returns top N as plain objects.
+ * Handles incoming POST requests (participant submitting their final time & details)
  */
-function getTopRows(n) {
-  var sheet = getSheet();
-  var last  = sheet.getLastRow();
-  if (last <= 1) return [];  // no data beyond header
-
-  // Read all data rows (skip row 1 = header)
-  var data = sheet.getRange(2, 1, last - 1, 5).getValues();
-  // Columns: 0=Timestamp, 1=Name, 2=Roll, 3=Seconds, 4=Display
-
-  // Deduplicate: keep the fastest (lowest Seconds) entry per Name
-  var best = {};
-  data.forEach(function(row) {
-    var name    = (row[1] || "").toString().trim();
-    var roll    = (row[2] || "").toString().trim();
-    var seconds = parseFloat(row[3]) || 0;
-    var display = (row[4] || seconds + "s").toString();
-    if (!name) return;
-    if (!best[name] || seconds < best[name].seconds) {
-      best[name] = { name: name, roll: roll, seconds: seconds, display: display };
+function doPost(e) {
+  const lock = LockService.getScriptLock();
+  // Wait up to 10 seconds for concurrent submissions to prevent row overwrite collisions
+  const hasLock = lock.tryLock(10000);
+  
+  try {
+    let data = {};
+    if (e && e.postData && e.postData.contents) {
+      try {
+        data = JSON.parse(e.postData.contents);
+      } catch (err) {
+        data = e.parameter || {};
+      }
+    } else if (e && e.parameter) {
+      data = e.parameter;
     }
-  });
 
-  // Sort by seconds ascending (fastest first)
-  var sorted = Object.values(best).sort(function(a, b) {
-    return a.seconds - b.seconds;
-  });
+    const name = String(data.name || "").trim();
+    const roll = String(data.roll || "").trim();
+    const seconds = parseFloat(data.seconds) || 0;
+    const display = String(data.display || "").trim();
+    const code = String(data.code || "").trim();
+    const ts = data.ts || new Date().toISOString();
 
-  return sorted.slice(0, n);
+    if (!name || !roll || seconds <= 0) {
+      return ContentService.createTextOutput(JSON.stringify({
+        status: "error",
+        message: "Missing required fields (name, roll, or valid seconds)"
+      })).setMimeType(ContentService.MimeType.JSON);
+    }
+
+    const sheet = getOrCreateSheet();
+    sheet.appendRow([ts, name, roll, seconds, display, code]);
+
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "success",
+      message: "Result saved to leaderboard",
+      entry: { name, roll, seconds, display, code, ts }
+    })).setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+
+  } finally {
+    if (hasLock) {
+      lock.releaseLock();
+    }
+  }
 }
 
 /**
- * jsonResponse — Wraps a value in a ContentService JSON response with CORS.
+ * Handles incoming GET requests (fetching Top 50, Top 100, or All records)
+ * Examples:
+ *   ?action=top50
+ *   ?action=top100
+ *   ?action=all
+ *   &dedupe=false (to see every attempt rather than only each student's fastest)
  */
-function jsonResponse(obj) {
-  return ContentService
-    .createTextOutput(JSON.stringify(obj))
-    .setMimeType(ContentService.MimeType.JSON);
-}
+function doGet(e) {
+  try {
+    const sheet = getOrCreateSheet();
+    const lastRow = sheet.getLastRow();
+    
+    if (lastRow <= 1) {
+      return ContentService.createTextOutput(JSON.stringify([])).setMimeType(ContentService.MimeType.JSON);
+    }
 
-// ── Optional: manual test function ───────────────────────────────────────────
-/**
- * Run this function in the Apps Script editor to verify everything works:
- *   1. Open Extensions > Apps Script
- *   2. Select "testLeaderboard" from the dropdown
- *   3. Click Run
- *   4. Check the Execution Log at the bottom
- */
-function testLeaderboard() {
-  // Insert two test rows
-  var sheet = getSheet();
-  sheet.appendRow([new Date().toISOString(), "Test Student", "REG001", 45.2, "00:45.2"]);
-  sheet.appendRow([new Date().toISOString(), "Another Student", "REG002", 32.7, "00:32.7"]);
-  SpreadsheetApp.flush();
+    // Read all rows starting from row 2 (skip headers)
+    const range = sheet.getRange(2, 1, lastRow - 1, HEADERS.length);
+    const rawValues = range.getValues();
 
-  // Read back top 50
-  var rows = getTopRows(50);
-  Logger.log("Top rows: " + JSON.stringify(rows));
-  Logger.log("Test passed! " + rows.length + " rows returned.");
+    const action = (e && e.parameter && e.parameter.action) ? e.parameter.action.toLowerCase() : "top50";
+    const dedupeParam = (e && e.parameter && e.parameter.dedupe) ? e.parameter.dedupe.toLowerCase() : "true";
+    const shouldDedupe = dedupeParam !== "false";
+
+    let rows = rawValues.map((r, idx) => {
+      return {
+        rowId: idx + 2,
+        timestamp: r[0] ? new Date(r[0]).toISOString() : "",
+        name: String(r[1] || "").trim(),
+        roll: String(r[2] || "").trim(),
+        seconds: parseFloat(r[3]) || 999999,
+        display: String(r[4] || "").trim(),
+        code: String(r[5] || "").trim()
+      };
+    }).filter(r => r.name && r.roll && r.seconds < 999999);
+
+    // Optional Deduplication: Keep the fastest time for each student (grouped by roll number)
+    if (shouldDedupe) {
+      const bestMap = new Map();
+      rows.forEach(item => {
+        const key = item.roll.toLowerCase();
+        if (!bestMap.has(key) || item.seconds < bestMap.get(key).seconds) {
+          bestMap.set(key, item);
+        }
+      });
+      rows = Array.from(bestMap.values());
+    }
+
+    // Sort by seconds ascending (fastest first)
+    rows.sort((a, b) => a.seconds - b.seconds);
+
+    // Assign rank
+    rows.forEach((item, index) => {
+      item.rank = index + 1;
+    });
+
+    // Limit based on action
+    let result = rows;
+    if (action === "top50") {
+      result = rows.slice(0, 50);
+    } else if (action === "top100") {
+      result = rows.slice(0, 100);
+    }
+
+    return ContentService.createTextOutput(JSON.stringify(result))
+      .setMimeType(ContentService.MimeType.JSON);
+
+  } catch (error) {
+    return ContentService.createTextOutput(JSON.stringify({
+      status: "error",
+      message: error.toString()
+    })).setMimeType(ContentService.MimeType.JSON);
+  }
 }
